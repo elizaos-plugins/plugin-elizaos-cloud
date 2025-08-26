@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elizaos/plugin-elizaos-cloud.git"
+    "url": "git+https://github.com/elizaos-plugins/plugin-elizaos-cloud.git"
   },
   "exports": {
     "./package.json": "./package.json",
