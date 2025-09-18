@@ -9,6 +9,7 @@ import type {
   Plugin,
   TextEmbeddingParams,
   TokenizeTextParams,
+  VideoProcessingParams,
 } from '@elizaos/core';
 import { EventType, logger, ModelType, VECTOR_DIMS } from '@elizaos/core';
 import {
@@ -365,6 +366,12 @@ export const elizaosCloudPlugin: Plugin = {
     ELIZAOS_EMBEDDING_DIMENSIONS: process.env.ELIZAOS_EMBEDDING_DIMENSIONS,
     ELIZAOS_IMAGE_DESCRIPTION_MODEL: process.env.ELIZAOS_IMAGE_DESCRIPTION_MODEL,
     ELIZAOS_IMAGE_DESCRIPTION_MAX_TOKENS: process.env.ELIZAOS_IMAGE_DESCRIPTION_MAX_TOKENS,
+    ELIZAOS_IMAGE_MODEL: process.env.ELIZAOS_IMAGE_MODEL,
+    ELIZAOS_IMAGE_QUALITY: process.env.ELIZAOS_IMAGE_QUALITY,
+    ELIZAOS_IMAGE_STYLE: process.env.ELIZAOS_IMAGE_STYLE,
+    ELIZAOS_VIDEO_MODEL: process.env.ELIZAOS_VIDEO_MODEL,
+    ELIZAOS_VIDEO_DURATION: process.env.ELIZAOS_VIDEO_DURATION,
+    ELIZAOS_VIDEO_RESOLUTION: process.env.ELIZAOS_VIDEO_RESOLUTION,
     ELIZAOS_EXPERIMENTAL_TELEMETRY: process.env.ELIZAOS_EXPERIMENTAL_TELEMETRY,
   },
   async init(_config, runtime) {
@@ -624,13 +631,20 @@ export const elizaosCloudPlugin: Plugin = {
         prompt: string;
         n?: number;
         size?: string;
+        model?: string;
+        quality?: string;
+        style?: string;
       }
     ) => {
       const n = params.n || 1;
       const size = params.size || '1024x1024';
       const prompt = params.prompt;
-      const modelName = 'dall-e-3'; // Default DALL-E model
+      const modelName = params.model || getSetting(runtime, 'ELIZAOS_IMAGE_MODEL', 'dall-e-3') || 'dall-e-3';
+      const quality = params.quality || getSetting(runtime, 'ELIZAOS_IMAGE_QUALITY', 'standard') || 'standard';
+      const style = params.style || getSetting(runtime, 'ELIZAOS_IMAGE_STYLE', 'natural') || 'natural';
+      
       logger.log(`[ElizaOS] Using IMAGE model: ${modelName}`);
+      logger.log(`[ElizaOS] Image parameters: size=${size}, quality=${quality}, style=${style}`);
 
       const baseURL = getBaseURL(runtime);
       const apiKey = getApiKey(runtime);
@@ -642,32 +656,56 @@ export const elizaosCloudPlugin: Plugin = {
       try {
         logger.info(`[ElizaOS] 🎨 Generating image with prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`);
         logger.info(`[ElizaOS] 📤 Making request to: ${baseURL}/images/generations`);
+        
+        // Build request payload based on model type
+        const requestPayload: any = {
+          prompt: prompt,
+          n: n,
+          size: size,
+        };
+
+        // For DALL-E 3, include quality and style parameters
+        if (modelName === 'dall-e-3') {
+          requestPayload.model = 'dall-e-3';
+          requestPayload.quality = quality;
+          requestPayload.style = style;
+        } else if (modelName === 'dall-e-2') {
+          requestPayload.model = 'dall-e-2';
+          // DALL-E 2 doesn't support quality/style parameters
+        } else {
+          // For other models, include the model name
+          requestPayload.model = modelName;
+          // Include quality and style for potential future models
+          requestPayload.quality = quality;
+          requestPayload.style = style;
+        }
+
         const response = await fetch(`${baseURL}/images/generations`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            prompt: prompt,
-            n: n,
-            size: size,
-          }),
+          body: JSON.stringify(requestPayload),
         });
 
         const responseClone = response.clone();
         const rawResponseBody = await responseClone.text();
 
         if (!response.ok) {
+          logger.error(`[ElizaOS] Image generation failed: ${response.status} ${response.statusText}`);
+          logger.error(`[ElizaOS] Response body: ${rawResponseBody}`);
           throw new Error(`Failed to generate image: ${response.statusText}`);
         }
 
         const data = await response.json();
         const typedData = data as { data: { url: string }[] };
 
+        logger.info(`[ElizaOS] ✅ Successfully generated ${typedData.data.length} image(s)`);
         return typedData.data;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
+        logger.error(`[ElizaOS] Image generation error: ${message}`);
         throw error;
       }
     },
@@ -866,6 +904,85 @@ export const elizaosCloudPlugin: Plugin = {
     },
     [ModelType.OBJECT_LARGE]: async (runtime: IAgentRuntime, params: ObjectGenerationParams) => {
       return generateObjectByModelType(runtime, params, ModelType.OBJECT_LARGE, getLargeModel);
+    },
+    [ModelType.VIDEO]: async (
+      runtime: IAgentRuntime,
+      params: {
+        prompt: string;
+        model?: string;
+        duration?: number;
+        resolution?: string;
+      }
+    ) => {
+      const prompt = params.prompt;
+      const modelName = params.model || getSetting(runtime, 'ELIZAOS_VIDEO_MODEL', 'google-veo') || 'google-veo';
+      const duration = params.duration || Number.parseInt(getSetting(runtime, 'ELIZAOS_VIDEO_DURATION', '5') || '5', 10);
+      const resolution = params.resolution || getSetting(runtime, 'ELIZAOS_VIDEO_RESOLUTION', '1280x720') || '1280x720';
+      
+      logger.log(`[ElizaOS] Using VIDEO model: ${modelName}`);
+      logger.log(`[ElizaOS] Video parameters: duration=${duration}s, resolution=${resolution}`);
+
+      const baseURL = getBaseURL(runtime);
+      const apiKey = getApiKey(runtime);
+
+      if (!apiKey) {
+        throw new Error('ElizaOS API key not configured');
+      }
+
+      try {
+        logger.info(`[ElizaOS] 🎬 Generating video with prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`);
+        logger.info(`[ElizaOS] 📤 Making request to: ${baseURL}/videos/generations`);
+        
+        const requestPayload: any = {
+          prompt: prompt,
+          model: modelName,
+        };
+
+        // Add optional parameters if provided
+        if (params.duration) requestPayload.duration = duration;
+        if (params.resolution) requestPayload.resolution = resolution;
+
+        const response = await fetch(`${baseURL}/videos/generations`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestPayload),
+        });
+
+        const responseClone = response.clone();
+        const rawResponseBody = await responseClone.text();
+
+        if (!response.ok) {
+          logger.error(`[ElizaOS] Video generation failed: ${response.status} ${response.statusText}`);
+          logger.error(`[ElizaOS] Response body: ${rawResponseBody}`);
+          throw new Error(`Failed to generate video: ${response.statusText}`);
+        }
+
+        const data = await response.json() as {
+          id: string;
+          status: string;
+          url?: string;
+          thumbnail_url?: string;
+          duration?: number;
+          resolution?: string;
+          created_at?: string;
+          completed_at?: string;
+          error?: string;
+          metadata?: any;
+        };
+        
+        logger.info(`[ElizaOS] ✅ Successfully initiated video generation`);
+        logger.info(`[ElizaOS] Video status: ${data.status || 'unknown'}`);
+        
+        // Return the full response which includes id, status, url, etc.
+        return data;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`[ElizaOS] Video generation error: ${message}`);
+        throw error;
+      }
     },
   },
   tests: [
